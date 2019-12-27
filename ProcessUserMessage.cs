@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Telegram.Bot;
+using Telegram.Bot.Types.Enums;
 using System.Net.Http;
 
 namespace Url2Kindle.Functions
@@ -23,7 +24,7 @@ namespace Url2Kindle.Functions
         [FunctionName("ProcessUserMessage")]
         public static async Task<IActionResult> Run(
             [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = null)] HttpRequest req,
-            [Blob("uri-htmls/{name}", FileAccess.Write)] Stream htmlBlobStream,
+            [Blob("uri-htmls/{rand-guid}.html", FileAccess.Write)] Stream htmlBlobStream,
             ILogger log)
         {
             var requestContent = await GetRequestContent(req.HttpContext);
@@ -40,6 +41,9 @@ namespace Url2Kindle.Functions
                 await response.CopyToAsync(htmlBlobStream);
             }
 
+            await botClient.SendTextMessageAsync(botMessage.Chat.Id, "Starting document processing...");
+            await botClient.SendChatActionAsync(botMessage.Chat.Id, ChatAction.Typing);
+            
             return new OkResult();
 
             async Task<string> GetRequestContent(HttpContext context)
