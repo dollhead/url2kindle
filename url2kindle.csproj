@@ -4,8 +4,10 @@
     <AzureFunctionsVersion>v2</AzureFunctionsVersion>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Kindlegen" Version="1.0.2" />
     <PackageReference Include="Microsoft.NET.Sdk.Functions" Version="1.0.29" />
     <PackageReference Include="Microsoft.Azure.WebJobs.Extensions.Storage" Version="3.0.2" />
+    <PackageReference Include="NReadability" Version="1.4.9" />
     <PackageReference Include="Telegram.Bot" Version="15.1.0" />
   </ItemGroup>
   <ItemGroup>

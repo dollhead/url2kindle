@@ -10,21 +10,27 @@ using Newtonsoft.Json;
 using Telegram.Bot;
 using Telegram.Bot.Types.Enums;
 using System.Net.Http;
+using Kindlegen;
+using Kindlegen.Models;
+using NReadability;
+using Telegram.Bot.Types.InputFiles;
 
 namespace Url2Kindle.Functions
 {
     public static class ProcessUserMessage
     {
-        private static string telegramApiToken = System.Environment.GetEnvironmentVariable("TelegramApiToken");
+        private static readonly string TelegramApiToken = System.Environment.GetEnvironmentVariable("TelegramApiToken");
 
-        private static HttpClient httpClient = new HttpClient();
+        private static readonly HttpClient HttpClient = new HttpClient();
         
-        private static TelegramBotClient botClient = new TelegramBotClient(telegramApiToken, httpClient);
+        private static readonly TelegramBotClient BotClient = new TelegramBotClient(TelegramApiToken, HttpClient);
+
+        private static readonly NReadabilityTranscoder Transcoder =
+            new NReadabilityTranscoder(ReadingStyle.Ebook, ReadingMargin.Medium, ReadingSize.Medium);
 
         [FunctionName("ProcessUserMessage")]
         public static async Task<IActionResult> Run(
             [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = null)] HttpRequest req,
-            [Blob("uri-htmls/{rand-guid}.html", FileAccess.Write)] Stream htmlBlobStream,
             ILogger log)
         {
             var requestContent = await GetRequestContent(req.HttpContext);
@@ -32,18 +38,46 @@ namespace Url2Kindle.Functions
 
             if (!Uri.TryCreate(botMessage.Message.Text, UriKind.Absolute, out var uri))
             {
-                await botClient.SendTextMessageAsync(botMessage.Chat.Id, "Please, send a valid uri.");
+                await BotClient.SendTextMessageAsync(botMessage.Chat.Id, "Please, send a valid uri.");
                 return new OkResult();
             }
 
-            using(var response = await httpClient.GetStreamAsync(uri))
+
+            await BotClient.SendChatActionAsync(botMessage.Chat.Id, ChatAction.Typing);
+
+            string html;
+            using (var response = await HttpClient.GetAsync(uri))
             {
-                await response.CopyToAsync(htmlBlobStream);
+                if (!response.IsSuccessStatusCode)
+                {
+                    await BotClient.SendTextMessageAsync(botMessage.Chat.Id, "Failed to open provided uri.");
+                    return new OkResult();
+                }
+
+                html = await response.Content.ReadAsStringAsync();
+            }
+            
+            var input = new TranscodingInput(html);
+            var transcodingResult = Transcoder.Transcode(input);
+            if (!transcodingResult.ContentExtracted)
+            {
+                await BotClient.SendTextMessageAsync(botMessage.Chat.Id, "Failed to extract content.");
+                return new OkResult();
             }
 
-            await botClient.SendTextMessageAsync(botMessage.Chat.Id, "Starting document processing...");
-            await botClient.SendChatActionAsync(botMessage.Chat.Id, ChatAction.Typing);
-            
+            await BotClient.SendTextMessageAsync(botMessage.Chat.Id, transcodingResult.ExtractedTitle);
+
+            var filePath = Guid.NewGuid().ToString();
+            using (var writer = new StreamWriter(filePath))
+            {
+                await writer.WriteAsync(transcodingResult.ExtractedContent);
+            }
+
+            var result = KindleConverter.Create(filePath)
+                .SetCompressionLevel(CompressionLevel.NoCompression)
+                .SetOutput($"{filePath}.mobi")
+                .Convert();
+
             return new OkResult();
 
             async Task<string> GetRequestContent(HttpContext context)
