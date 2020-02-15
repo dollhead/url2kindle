@@ -14,6 +14,10 @@ using Kindlegen;
 using Kindlegen.Models;
 using NReadability;
 using Telegram.Bot.Types.InputFiles;
+using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Url2Kindle.Functions
 {
@@ -36,21 +40,29 @@ namespace Url2Kindle.Functions
             var requestContent = await GetRequestContent(req.HttpContext);
             var botMessage = JsonConvert.DeserializeObject<BotMessage>(requestContent);
 
-            if (!Uri.TryCreate(botMessage.Message.Text, UriKind.Absolute, out var uri))
+            long chatId = botMessage.Chat.Id;
+
+            log.LogInformation($"Received a message from user {chatId}");
+
+            string messageText = botMessage.Message.Text;
+            if (!Uri.TryCreate(messageText, UriKind.Absolute, out var uri))
             {
-                await BotClient.SendTextMessageAsync(botMessage.Chat.Id, "Please, send a valid uri.");
+                log.LogWarning($"Failed to parse URI in {messageText}");
+
+                await BotClient.SendTextMessageAsync(chatId, "Please, send a valid uri.");
                 return new OkResult();
             }
 
-
-            await BotClient.SendChatActionAsync(botMessage.Chat.Id, ChatAction.Typing);
+            await BotClient.SendChatActionAsync(chatId, ChatAction.Typing);
 
             string html;
             using (var response = await HttpClient.GetAsync(uri))
             {
                 if (!response.IsSuccessStatusCode)
                 {
-                    await BotClient.SendTextMessageAsync(botMessage.Chat.Id, "Failed to open provided uri.");
+                    log.LogWarning($"Failed to open URI {uri}");
+
+                    await BotClient.SendTextMessageAsync(chatId, "Failed to open provided uri.");
                     return new OkResult();
                 }
 
@@ -61,22 +73,54 @@ namespace Url2Kindle.Functions
             var transcodingResult = Transcoder.Transcode(input);
             if (!transcodingResult.ContentExtracted)
             {
-                await BotClient.SendTextMessageAsync(botMessage.Chat.Id, "Failed to extract content.");
+                var message = "Failed to extract content.";
+                log.LogWarning(message);
+                await BotClient.SendTextMessageAsync(chatId, "message");
                 return new OkResult();
             }
 
-            await BotClient.SendTextMessageAsync(botMessage.Chat.Id, transcodingResult.ExtractedTitle);
+            await BotClient.SendTextMessageAsync(chatId, transcodingResult.ExtractedTitle);
 
-            var filePath = Guid.NewGuid().ToString();
+            var fileId = Guid.NewGuid().ToString();
+            var filePath = Path.Combine(Path.GetTempPath(), $"{fileId}.html");
+
             using (var writer = new StreamWriter(filePath))
             {
                 await writer.WriteAsync(transcodingResult.ExtractedContent);
             }
 
-            var result = KindleConverter.Create(filePath)
-                .SetCompressionLevel(CompressionLevel.NoCompression)
-                .SetOutput($"{filePath}.mobi")
-                .Convert();
+            var resultFilePath = Path.ChangeExtension(filePath, "mobi");
+            try
+            {
+                var kindleGen = new Process();
+                kindleGen.StartInfo.UseShellExecute = false;
+                kindleGen.StartInfo.RedirectStandardOutput = true;
+                kindleGen.StartInfo.FileName =  Path.Combine(Path.GetTempPath(), "kindlegen");
+
+                var tempPathLinux = Path.Combine(Path.GetTempPath(), "kindlegen");
+                if(!File.Exists(tempPathLinux))
+                    File.Copy("kindlegen", Path.Combine(Path.GetTempPath(), "kindlegen"), false);                
+                var tempPathWindows = Path.Combine(Path.GetTempPath(), "kindlegen.exe");
+                if(!File.Exists(tempPathWindows))
+                    File.Copy("kindlegen.exe", Path.Combine(Path.GetTempPath(), "kindlegen.exe"), false);   
+
+                var arguments = $"{filePath} -o \"{Path.GetFileName(resultFilePath)}\"";
+                kindleGen.StartInfo.Arguments = Encoding.Default.GetString(Encoding.UTF8.GetBytes(arguments));
+                kindleGen.Start();
+                kindleGen.WaitForExit();
+            }
+            catch(Exception ex)
+            {
+                log.LogError(ex, "Failed to convert file");
+            }
+
+            using (var fs = File.OpenRead(resultFilePath))
+            {
+                InputOnlineFile inputOnlineFile = new InputOnlineFile(fs, $"{transcodingResult.ExtractedTitle}.mobi");
+                await BotClient.SendDocumentAsync(chatId, inputOnlineFile);
+            }
+
+            log.LogInformation($"Successfully converted uri {uri} to kindle book");
 
             return new OkResult();
 
@@ -88,105 +132,5 @@ namespace Url2Kindle.Functions
                 }
             }
         }
-    }
-
-    internal class BotMessage
-    {
-        [JsonProperty("update_id")]
-        public long UpdateId { get; set; }
-
-        [JsonProperty("message")]
-        public Message Message { get; set; }
-
-        [JsonProperty("callback_query")]
-        public CallbackQuery CallbackQuery { get; set; }
-
-        public Chat Chat
-        {
-            get
-            {
-                return Message?.Chat ?? CallbackQuery?.Message?.Chat;
-            }
-        }
-
-        public MessageSender From
-        {
-            get
-            {
-                return Message?.From ?? CallbackQuery?.From;
-            }
-        }
-    }
-
-    internal class Message
-    {
-        [JsonProperty("message_id")]
-        public string MessageId { get; set; }
-
-        [JsonProperty("date")]
-        public long Date { get; set; }
-
-        [JsonProperty("text")]
-        public string Text { get; set; }
-
-        [JsonProperty("from")]
-        public MessageSender From { get; set; }
-
-        [JsonProperty("chat")]
-        public Chat Chat { get; set; }
-
-        [JsonProperty("photo")]
-        public dynamic Photo { get; set; }
-
-        [JsonProperty("document")]
-        public dynamic Document { get; set; }
-    }
-
-    internal class MessageSender
-    {
-        [JsonProperty("id")]
-        public long Id { get; set; }
-
-        [JsonProperty("is_bot")]
-        public bool IsBot { get; set; }
-
-        [JsonProperty("first_name")]
-        public string FirstName { get; set; }
-
-        [JsonProperty("username")]
-        public string Username { get; set; }
-
-        [JsonProperty("language_code")]
-        public string LanguageCode { get; set; }
-    }
-
-        internal class Chat
-    {
-        [JsonProperty("id")]
-        public long Id { get; set; }
-
-        [JsonProperty("first_name")]
-        public string FirstName { get; set; }
-
-        [JsonProperty("type")]
-        public string Type { get; set; }
-    }
-
-    internal class CallbackQuery
-    {
-        [JsonProperty("id")]
-        public string Id { get; set; }
-
-        [JsonProperty("chat_instance")]
-        public string ChatInstance { get; set; }
-
-        [JsonProperty("data")]
-        public string Data { get; set; }
-
-        [JsonProperty("from")]
-        public MessageSender From { get; set; }
-
-        [JsonProperty("message")]
-        public Message Message { get; set; }
     }
 }
