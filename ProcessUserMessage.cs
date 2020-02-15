@@ -68,7 +68,7 @@ namespace Url2Kindle.Functions
 
                 html = await response.Content.ReadAsStringAsync();
             }
-            
+
             var input = new TranscodingInput(html);
             var transcodingResult = Transcoder.Transcode(input);
             if (!transcodingResult.ContentExtracted)
@@ -89,30 +89,7 @@ namespace Url2Kindle.Functions
                 await writer.WriteAsync(transcodingResult.ExtractedContent);
             }
 
-            var resultFilePath = Path.ChangeExtension(filePath, "mobi");
-            try
-            {
-                var kindleGen = new Process();
-                kindleGen.StartInfo.UseShellExecute = false;
-                kindleGen.StartInfo.RedirectStandardOutput = true;
-                kindleGen.StartInfo.FileName =  Path.Combine(Path.GetTempPath(), "kindlegen");
-
-                var tempPathLinux = Path.Combine(Path.GetTempPath(), "kindlegen");
-                if(!File.Exists(tempPathLinux))
-                    File.Copy("kindlegen", Path.Combine(Path.GetTempPath(), "kindlegen"), false);                
-                var tempPathWindows = Path.Combine(Path.GetTempPath(), "kindlegen.exe");
-                if(!File.Exists(tempPathWindows))
-                    File.Copy("kindlegen.exe", Path.Combine(Path.GetTempPath(), "kindlegen.exe"), false);   
-
-                var arguments = $"{filePath} -o \"{Path.GetFileName(resultFilePath)}\"";
-                kindleGen.StartInfo.Arguments = Encoding.Default.GetString(Encoding.UTF8.GetBytes(arguments));
-                kindleGen.Start();
-                kindleGen.WaitForExit();
-            }
-            catch(Exception ex)
-            {
-                log.LogError(ex, "Failed to convert file");
-            }
+            string resultFilePath = ConvertToMobi(log, filePath);
 
             using (var fs = File.OpenRead(resultFilePath))
             {
@@ -131,6 +108,36 @@ namespace Url2Kindle.Functions
                     return await reader.ReadToEndAsync();
                 }
             }
+        }
+
+        private static string ConvertToMobi(ILogger log, string filePath)
+        {
+            var resultFilePath = Path.ChangeExtension(filePath, "mobi");
+            try
+            {
+                var kindleGen = new Process();
+                kindleGen.StartInfo.UseShellExecute = false;
+                kindleGen.StartInfo.RedirectStandardOutput = true;
+                kindleGen.StartInfo.FileName = Path.Combine(Path.GetTempPath(), "kindlegen");
+
+                var tempPathLinux = Path.Combine(Path.GetTempPath(), "kindlegen");
+                if (!File.Exists(tempPathLinux))
+                    File.Copy("kindlegen", Path.Combine(Path.GetTempPath(), "kindlegen"), false);
+                var tempPathWindows = Path.Combine(Path.GetTempPath(), "kindlegen.exe");
+                if (!File.Exists(tempPathWindows))
+                    File.Copy("kindlegen.exe", Path.Combine(Path.GetTempPath(), "kindlegen.exe"), false);
+
+                var arguments = $"{filePath} -o \"{Path.GetFileName(resultFilePath)}\"";
+                kindleGen.StartInfo.Arguments = Encoding.Default.GetString(Encoding.UTF8.GetBytes(arguments));
+                kindleGen.Start();
+                kindleGen.WaitForExit();
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Failed to convert file");
+            }
+
+            return resultFilePath;
         }
     }
 }
